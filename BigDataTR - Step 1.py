@@ -16,6 +16,9 @@
 # MAGIC %md
 # MAGIC ## Step 1 - Data Sourcing , Ingesting,  Inital Cleaning, Visualisation and Transformation 
 # MAGIC The intent of this workbook is to injest the data file, carry out intial exploration to find defects, irregularities, visualise data issues and drop/clean to provide a data file that can be used in a subsequent steps for further investigation to make predictions via Machine Learning
+# MAGIC 
+# MAGIC Source Control file recorded here :
+# MAGIC https://github.com/sharpyATU/ATUBigData1/blob/main/BigDataTR%20-%20Step%201.py
 
 # COMMAND ----------
 
