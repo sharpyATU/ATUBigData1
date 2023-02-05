@@ -392,12 +392,18 @@ df_master.createOrReplaceTempView(temp_table_name)
 
 ## Writing cleaned pyspark dataframe to csv file
 df_master.write.option("header",True) \
- .csv("/FileStore/tables/step2_0502_2007_to_2018Q4-2201.csv")
+ .csv("/FileStore/tables/step3_0502_1440_to_2018Q4-2201.csv")
 
 # COMMAND ----------
 
 #Preserve this information to produce data copy for local use or to ensure we can return to this stage with minimum effort. locally
-df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 'true').save('dbfs:/FileStore/backup/tables/step2_0502_2007_to_2018Q4-2201.csv')
+df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 'true').save('dbfs:/FileStore/backup/tables/step3_0502_1440_to_2018Q4.csv')
  
 # How to download to PC
 # https://adb-8855045224243626.6.azuredatabricks.net/files/backup/tables/step2_0402_2007_to_2018Q4-2201.csv/part-00000-tid-8010089884215906983-bb4e8ab1-d100-4fad-b574-e0cfa00480ba-202-1-c000.csv?o=8855045224243626
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##Prepare features for ML 
+# MAGIC Binary Encoding for Categorical Features, One-Hot Encoding for Categorical Feature
