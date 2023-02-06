@@ -339,6 +339,10 @@ from pyspark.sql.functions import isnan, when, count, col, avg, split,lit
 df_master = df_master.withColumn("tot_coll_amt", when((col("tot_coll_amt").isNull() & col("loan_status").isin("Fully Paid", "Charged Off", "Does not meet the credit policy. Status:Fully Paid")), lit("0")).otherwise(col("tot_coll_amt")))
 df_master = df_master.withColumn("tot_cur_bal", when((col("tot_cur_bal").isNull() & col("loan_status").isin("Fully Paid", "Charged Off")), lit("0")).otherwise(col("tot_cur_bal")))
 
+# Modify the updated fields from strings to ints
+df_master = df_master.withColumn('tot_coll_amt_clean', df_master['tot_coll_amt'].cast('double'))
+df_master = df_master.withColumn('tot_cur_bal_cean', df_master['tot_cur_bal'].cast('double'))
+
 #Create a Boolean "Class" to use for future models and observe defaulters  (0 no debt , 1 being in debt )
 df_master = df_master.withColumn("target", when(col("loan_status").isin("Default","Charged Off", "Late (31-120 days)", "Late (16-30 days)", "Does not meet the credit policy. Status:Charged Off","In Grace Period"), 1).otherwise(0))
 
@@ -371,16 +375,26 @@ df_master.printSchema()
 
 # COMMAND ----------
 
+#convert fields that were parsed for you use but not updated
+#df_master = df_master.withColumn('tot_cur_bal_cean', df_master['tot_cur_bal'].cast('double'))
+
 # Dropping further fields, member_id contains no data, zip code replicates data with addr_code and URL is a link to the loan info that provides no further value )
-df_master = df_master.drop("emplength")
-df_master = df_master.drop("term")
-df_master = df_master.drop("class")
-df_master = df_master.drop("loan_status")
-df_master = df_master.drop("issue_d")
+replicated_cols = ['emp_length', 'term','loan_status','tot_coll_amt', 'tot_cur_bal','issue_d'] 
+df_master = df_master.drop(*replicated_cols)
+
+#'Drop fields where the data is full of highly distinct fields (human free text  input)'
+
+highstingdatavariance_cols= ['emp_title', 'disbursement_method','debt_settlement_flag', 'title','earliest_cr_line', 'last_pymnt_d','last_credit_pull_d', 'disbursement_method', 'debt_settlement_flag', 'title'] 
+df_master = df_master.drop(*highstingdatavariance_cols)
+
+#Run an action command , this will allow loading to be executed, and enable better optimisation and distribution  of the DAG before further analytics
+df_master.describe().show()
  
-# Refresht the temporary table to hold the data for optimised queries etc..can always return to this points
-temp_table_name = "loantempdata"
-df_master.createOrReplaceTempView(temp_table_name)
+
+
+# COMMAND ----------
+
+df_master.printSchema()
 
 # COMMAND ----------
 
@@ -392,12 +406,12 @@ df_master.createOrReplaceTempView(temp_table_name)
 
 ## Writing cleaned pyspark dataframe to csv file
 df_master.write.option("header",True) \
- .csv("/FileStore/tables/step3_0502_1440_to_2018Q4-2201.csv")
+ .csv("/FileStore/tables/step3_0502_1620_to_2018Q4-2201.csv")
 
 # COMMAND ----------
 
 #Preserve this information to produce data copy for local use or to ensure we can return to this stage with minimum effort. locally
-df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 'true').save('dbfs:/FileStore/backup/tables/step3_0502_1440_to_2018Q4.csv')
+df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 'true').save('dbfs:/FileStore/backup/tables/step3_0502_1620_to_2018Q4.csv')
  
 # How to download to PC
 # https://adb-8855045224243626.6.azuredatabricks.net/files/backup/tables/step2_0402_2007_to_2018Q4-2201.csv/part-00000-tid-8010089884215906983-bb4e8ab1-d100-4fad-b574-e0cfa00480ba-202-1-c000.csv?o=8855045224243626
@@ -407,3 +421,298 @@ df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 
 # MAGIC %md
 # MAGIC ##Prepare features for ML 
 # MAGIC Binary Encoding for Categorical Features, One-Hot Encoding for Categorical Feature
+
+# COMMAND ----------
+
+# Load the data file
+
+file_location = "/FileStore/tables/step3_0502_1620_to_2018Q4-2201.csv"
+#file_location = "/FileStore/tables/step2_0402_2007_to_2018Q4-2201.csv"
+# file_location = "/FileStore/tables/step2_0202_2007_to_2018Q4-2201.csv"
+# file_location = "/FileStore/tables/step2_2007_to_2018Q4-2201.csv"
+# file_location = "/FileStore/tables/tuncated_2007_to_2018Q4-2201.csv"
+file_type = "csv"
+
+# CSV options
+infer_schema = "true"
+first_row_is_header = "true"
+delimiter = ","
+
+# The applied options are for CSV files. For other file types, these will be ignored.
+df_master_step3 = (
+    spark.read.format(file_type)
+    .option("inferSchema", infer_schema)
+    .option("header", first_row_is_header)
+    .option("sep", delimiter)
+    .load(file_location)
+)
+
+display(df_master_step3)
+
+# COMMAND ----------
+
+df_master_step3.dropna().show(truncate=False)
+
+# COMMAND ----------
+
+df_master_step3 = df_master_step3.withColumn("class", col("target"))
+
+
+# COMMAND ----------
+
+# Refresh temporary table to hold the data for optimised queries via Spark SQL and Temp tables etc..
+temp_table_name = "loantempdata"
+df_master_step3.createOrReplaceTempView(temp_table_name)
+
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from  loantempdata where class  = 1
+
+# COMMAND ----------
+
+ # Import further spark modules
+from pyspark.sql import Row
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+from pyspark.sql.functions import lit
+
+# spark ml modules 
+from pyspark.ml.linalg import DenseVector
+from pyspark.ml.feature import StandardScaler
+from pyspark.ml.regression import LinearRegression, DecisionTreeRegressor, RandomForestRegressor
+
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorIndexer
+
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import OneHotEncoder, StringIndexer, VectorAssembler
+
+# COMMAND ----------
+
+from pyspark.ml.feature import OneHotEncoder
+
+
+#One-Hot Encoding for Categorical Features 
+categorical_cols = ['grade', 'sub_grade','home_ownership','verification_status', 'purpose','addr_state', 'issue_d_year','initial_list_status', 'application_type', 'pymnt_plan'] 
+
+for categorical_col in categorical_cols:
+    indexer = StringIndexer(inputCol=categorical_col, outputCol=categorical_col + "_numeric", handleInvalid='skip')
+    indexer_fitted = indexer.fit(df_master_step3) 
+    df_master_step3 = indexer_fitted.transform(df_master_step3)
+    encoder = OneHotEncoder(inputCols=[categorical_col + "_numeric"], outputCols=[categorical_col + "_onehot"])
+    df_master_step3 = encoder.fit(df_master_step3).transform(df_master_step3)    
+  
+
+#assembler_inputs = numerical_cols + [c + "_index" for c in categorical_cols]
+#assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="features")
+
+# COMMAND ----------
+
+#One-Hot Encoding for Categorical Features 
+categorical_cols_drop = ['grade', 'sub_grade','home_ownership','verification_status', 'purpose','addr_state', 'issue_d_year','initial_list_status', 'application_type', 'pymnt_plan', 'hardship_flag'] 
+
+categorical_cols_drop_numeric = ['grade_numeric', 'sub_grade_numeric','home_ownership_numeric','verification_status_numeric', 'purpose_numeric','addr_state_numeric', 'issue_d_year_numeric','initial_list_status_numeric', 'application_type_numeric', 'pymnt_plan_numeric'] 
+
+df_master_step3 = df_master_step3.drop(*categorical_cols_drop)
+df_master_step3= df_master_step3.drop(*categorical_cols_drop_numeric)
+
+df_master_step3.na.drop()
+
+df_master_step3.describe().show()
+
+
+# COMMAND ----------
+
+df_master_step3.printSchema()
+
+# COMMAND ----------
+
+
+
+
+df_master_step3.groupby("class").count().show()
+
+# COMMAND ----------
+
+# Adding a weight columns to the dataset to handle class imbalance
+# Hardcoding it to save some execution time - ( 303455/1955217) - (#Default Loans / #Total Loans)
+#balancingRatio  = 0.1552
+
+#df_master_step3 = df_master_step3.withColumn("weightColumn", when(col("class") == 0, balancingRatio)
+#                                           .otherwise((1-balancingRatio)))
+
+# COMMAND ----------
+
+colList = df_master_step3.columns
+print(colList)
+colList.remove("class")
+print(colList)
+
+# COMMAND ----------
+
+from pyspark.ml.feature import Imputer
+from pyspark.sql import DataFrameStatFunctions as statFunc
+from pyspark.ml.feature import StringIndexer
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.feature import IndexToString
+
+
+# set the input and output column names
+assembler = VectorAssembler(inputCols=[ *colList ], outputCol="features")
+
+loanDFTransformed = assembler.transform( df_master_step3)
+
+loanDFTransformed.show(5)
+
+# COMMAND ----------
+
+import mlflow
+import numpy as np
+import pandas as pd
+import sklearn.datasets
+import sklearn.metrics
+import sklearn.model_selection
+import sklearn.ensemble
+ 
+from hyperopt import fmin, tpe, hp, SparkTrials, Trials, STATUS_OK
+from hyperopt.pyll import scope
+
+# COMMAND ----------
+
+# Enable MLflow autologging for this notebook
+mlflow.autolog()
+
+# COMMAND ----------
+
+df_master.printSchema()
+
+# COMMAND ----------
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.decomposition import PCA
+
+#First thing we need to do is define the feature sets and the labels 
+X = colList #define the feature set [get rid of the target column (Class)] https://adb-5488307367723488.8.azuredatabricks.net/?o=5488307367723488#
+y = df_master_step3['class']   # define the labels
+
+#Now Split the dataset into the Training set and Test set
+X_train, X_test, y_train, y_test = train_test_split(X, y,test_size=0.2, random_state=56) #20% to be used in the training set and set the random state for repeatbility of this exercise  (should be zero)
+
+#PCA performs best with a normalized feature set. So will perform standard scalar normalization to normalize our feature set. To do this, execute the following code:
+sscaler = StandardScaler()
+X_train = sscaler.fit_transform(X_train)
+X_test = sscaler.transform(X_test)
+
+# COMMAND ----------
+
+# Define classification labels based on the loan being good or bad.
+data_df = df_master
+data_labels = data_df['class'] > 0
+data_df = data_df.drop('class')
+ 
+# Split 80/20 train-test
+X_train, X_test, y_train, y_test = sklearn.model_selection.train_test_split(
+  data_df,
+  data_labels,
+  test_size=0.2,
+  random_state=1
+)
+
+
+
+# COMMAND ----------
+
+with mlflow.start_run(run_name="gradient_boost") as run:
+    model = sklearn.ensemble.GradientBoostingClassifier(random_state=0)
+
+    # Models, parameters, and training metrics are tracked automatically
+    model.fit(X_train, y_train)
+
+    predicted_probs = model.predict_proba(X_test)
+    roc_auc = sklearn.metrics.roc_auc_score(y_test, predicted_probs[:, 1])
+
+    # The AUC score on test data is not automatically logged, so log it manually
+    mlflow.log_metric("test_auc", roc_auc)
+    print("Test AUC of: {}".format(roc_auc))
+
+# COMMAND ----------
+
+# Start a new run and assign a run_name for future reference
+with mlflow.start_run(run_name="gradient_boost") as run:
+    model_2 = sklearn.ensemble.GradientBoostingClassifier(
+        random_state=0,
+        # Try a new parameter setting for n_estimators
+        n_estimators=200,
+    )
+    model_2.fit(X_train, y_train)
+
+    predicted_probs = model_2.predict_proba(X_test)
+    roc_auc = sklearn.metrics.roc_auc_score(y_test, predicted_probs[:, 1])
+    mlflow.log_metric("test_auc", roc_auc)
+    print("Test AUC of: {}".format(roc_auc))
+
+# COMMAND ----------
+
+# Define the search space to explore
+search_space = {
+    "n_estimators": scope.int(hp.quniform("n_estimators", 20, 1000, 1)),
+    "learning_rate": hp.loguniform("learning_rate", -3, 0),
+    "max_depth": scope.int(hp.quniform("max_depth", 2, 5, 1)),
+}
+
+
+def train_model(params):
+    # Enable autologging on each worker
+    mlflow.autolog()
+    with mlflow.start_run(nested=True):
+        model_hp = sklearn.ensemble.GradientBoostingClassifier(random_state=0, **params)
+        model_hp.fit(X_train, y_train)
+        predicted_probs = model_hp.predict_proba(X_test)
+        # Tune based on the test AUC
+        # In production settings, you could use a separate validation set instead
+        roc_auc = sklearn.metrics.roc_auc_score(y_test, predicted_probs[:, 1])
+        mlflow.log_metric("test_auc", roc_auc)
+
+        # Set the loss to -1*auc_score so fmin maximizes the auc_score
+        return {"status": STATUS_OK, "loss": -1 * roc_auc}
+
+
+# SparkTrials distributes the tuning using Spark workers
+# Greater parallelism speeds processing, but each hyperparameter trial has less information from other trials
+# On smaller clusters or Databricks Community Edition try setting parallelism=2
+spark_trials = SparkTrials(parallelism=8)
+
+with mlflow.start_run(run_name="gb_hyperopt") as run:
+    # Use hyperopt to find the parameters yielding the highest AUC
+    best_params = fmin(
+        fn=train_model,
+        space=search_space,
+        algo=tpe.suggest,
+        max_evals=32,
+        trials=spark_trials,
+    )
+
+# COMMAND ----------
+
+# Sort runs by their test auc; in case of ties, use the most recent run
+best_run = mlflow.search_runs(
+    order_by=["metrics.test_auc DESC", "start_time DESC"],
+    max_results=10,
+).iloc[0]
+print("Best Run")
+print("AUC: {}".format(best_run["metrics.test_auc"]))
+print("Num Estimators: {}".format(best_run["params.n_estimators"]))
+print("Max Depth: {}".format(best_run["params.max_depth"]))
+print("Learning Rate: {}".format(best_run["params.learning_rate"]))
+
+best_model_pyfunc = mlflow.pyfunc.load_model(
+    "runs:/{run_id}/model".format(run_id=best_run.run_id)
+)
+best_model_predictions = best_model_pyfunc.predict(X_test[:5])
+print("Test Predictions: {}".format(best_model_predictions))
