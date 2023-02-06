@@ -22,12 +22,14 @@ sns.set_palette("Accent")
 from scipy import stats
 
 !pip install -U pandas-profiling[notebook]
+init_notebook_mode(connected=True)
+
 
 import plotly.plotly as py
 import plotly.graph_objs as go
 from plotly.offline import init_notebook_mode,iplot
 
-init_notebook_mode(connected=True)
+
 
 # COMMAND ----------
 
@@ -383,17 +385,76 @@ replicated_cols = ['emp_length', 'term','loan_status','tot_coll_amt', 'tot_cur_b
 df_master = df_master.drop(*replicated_cols)
 
 #'Drop fields where the data is full of highly distinct fields (human free text  input)'
-
 highstingdatavariance_cols= ['emp_title', 'disbursement_method','debt_settlement_flag', 'title','earliest_cr_line', 'last_pymnt_d','last_credit_pull_d', 'disbursement_method', 'debt_settlement_flag', 'title'] 
 df_master = df_master.drop(*highstingdatavariance_cols)
 
-#Run an action command , this will allow loading to be executed, and enable better optimisation and distribution  of the DAG before further analytics
-df_master.describe().show()
- 
 
 
 # COMMAND ----------
 
+# Find Count of Null, None, NaN of All DataFrame Columns , we can't run ML libs with nulls and empty data fields
+from pyspark.sql.functions import col,isnan,when,count
+df2 = df_master.select([count(when(col(c).contains('None') | \
+                            col(c).contains('NULL') | \
+                            (col(c) == '' ) | \
+                            col(c).isNull() | \
+                            isnan(c), c 
+                           )).alias(c)
+                    for c in df_master.columns])
+df2.head(2)
+
+# COMMAND ----------
+
+#'Drop fields where the data is full of highl null values, most of this data shows information once someone is in a debt scenario , not that they will debt
+lowimportancem_high_missingdata_cols = [
+    "collections_12_mths_ex_med",
+    "il_util",
+    "total_rev_hi_lim",
+    "acc_open_past_24mths",
+    "earliest_cr_line",
+    "bc_open_to_buy",
+    "bc_util",
+    "chargeoff_within_12_mths",
+    "mo_sin_old_il_acct",
+    "mo_sin_old_rev_tl_op",
+    "mo_sin_rcnt_rev_tl_op",
+    "mo_sin_rcnt_tl",
+    "mort_acc",
+    "mths_since_recent_bc",
+    "num_accts_ever_120_pd",
+    "num_actv_bc_tl",
+    "num_actv_rev_tl",
+    "num_bc_sats",
+    "num_bc_tl",
+    "num_il_tl",
+    "num_op_rev_tl",
+    "num_rev_accts",
+    "num_rev_tl_bal_gt_0",
+    "num_sats",
+    "num_tl_120dpd_2m",
+    "num_tl_30dpd",
+    "num_tl_90g_dpd_24m",
+    "num_tl_op_past_12m",
+    "pct_tl_nvr_dlq",
+    "percent_bc_gt_75",
+    "pub_rec_bankruptcies",
+    "tax_liens",
+    "tot_hi_cred_lim",
+    "total_bal_ex_mort",
+    "total_bc_limit",
+    "total_il_high_credit_limit",
+]
+
+df_master = df_master.drop(*lowimportancem_high_missingdata_cols)
+
+# COMMAND ----------
+
+#Fill remmaining Fields with nulls with zero's
+df_master = df_master_step3.na.fill(value=0)
+
+#Run an action command , this will allow loading to be executed, and enable better optimisation and distribution  of the DAG before further analytics
+df_master.describe().show()
+ 
 df_master.printSchema()
 
 # COMMAND ----------
@@ -406,12 +467,12 @@ df_master.createOrReplaceTempView(temp_table_name)
 
 ## Writing cleaned pyspark dataframe to csv file
 df_master.write.option("header",True) \
- .csv("/FileStore/tables/step3_0502_1620_to_2018Q4-2201.csv")
+ .csv("/FileStore/tables/step3_0602_1620_to_2018Q4-2201.csv")
 
 # COMMAND ----------
 
 #Preserve this information to produce data copy for local use or to ensure we can return to this stage with minimum effort. locally
-df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 'true').save('dbfs:/FileStore/backup/tables/step3_0502_1620_to_2018Q4.csv')
+df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 'true').save('dbfs:/FileStore/backup/tables/step3_0602_1620_to_2018Q4.csv')
  
 # How to download to PC
 # https://adb-8855045224243626.6.azuredatabricks.net/files/backup/tables/step2_0402_2007_to_2018Q4-2201.csv/part-00000-tid-8010089884215906983-bb4e8ab1-d100-4fad-b574-e0cfa00480ba-202-1-c000.csv?o=8855045224243626
@@ -426,7 +487,7 @@ df_master.coalesce(1).write.format('com.databricks.spark.csv').option('header', 
 
 # Load the data file
 
-file_location = "/FileStore/tables/step3_0502_1620_to_2018Q4-2201.csv"
+file_location = "/FileStore/tables/step3_0602_1620_to_2018Q4-2201.csv"
 #file_location = "/FileStore/tables/step2_0402_2007_to_2018Q4-2201.csv"
 # file_location = "/FileStore/tables/step2_0202_2007_to_2018Q4-2201.csv"
 # file_location = "/FileStore/tables/step2_2007_to_2018Q4-2201.csv"
@@ -451,12 +512,24 @@ display(df_master_step3)
 
 # COMMAND ----------
 
-df_master_step3.dropna().show(truncate=False)
+
 
 # COMMAND ----------
 
-df_master_step3 = df_master_step3.withColumn("class", col("target"))
+# Find Count of Null, None, NaN of All DataFrame Columns , we can't run ML libs with nulls and empty data fields
+from pyspark.sql.functions import col,isnan,when,count
+df2 = df_master_step3.select([count(when(col(c).contains('None') | \
+                            col(c).contains('NULL') | \
+                            (col(c) == '' ) | \
+                            col(c).isNull() | \
+                            isnan(c), c 
+                           )).alias(c)
+                    for c in df_master_step3.columns])
+df2.head(2)
 
+# COMMAND ----------
+
+df_master_step3.printSchema()
 
 # COMMAND ----------
 
@@ -464,11 +537,6 @@ df_master_step3 = df_master_step3.withColumn("class", col("target"))
 temp_table_name = "loantempdata"
 df_master_step3.createOrReplaceTempView(temp_table_name)
 
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC select * from  loantempdata where class  = 1
 
 # COMMAND ----------
 
@@ -490,6 +558,104 @@ from pyspark.ml.feature import VectorIndexer
 
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import OneHotEncoder, StringIndexer, VectorAssembler
+
+# COMMAND ----------
+
+df_master_step3.printSchema()
+
+# COMMAND ----------
+
+#df_master_step3 = df_master_step3.drop("features")
+df_master_step3 = df_master_step3.withColumn('indebt', df_master_step3['target'].cast('double'))
+df_master_step3.describe().show()
+
+# COMMAND ----------
+
+from pyspark.ml.feature import Imputer
+from pyspark.sql import DataFrameStatFunctions as statFunc
+from pyspark.ml.feature import StringIndexer
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.feature import IndexToString
+
+
+
+# NOTE the vectore assembler is on one field.https://www.youtube.com/watch?v=cZS5xYYIPzk
+colList = ['loan_amnt','funded_amnt','int_rate','fico_range_low','fico_range_high']
+
+# set the input and output column names
+assembler = VectorAssembler(inputCols=[ *colList ], outputCol="features")
+
+output = assembler.transform( df_master_step3)
+
+df_final  = output.select("features", "indebt")
+
+df_final.show()
+
+
+# COMMAND ----------
+
+train, test = df_final.randomSplit([0.7,0.3] ,seed=42)
+
+# COMMAND ----------
+
+from pyspark.ml.classification import LogisticRegression
+
+lr = LogisticRegression(labelCol="indebt")
+
+lrm = lr.fit(train)
+
+# COMMAND ----------
+
+lrm_summary = lrm.summary
+
+# COMMAND ----------
+
+lrm_summary.predictions.show()
+
+# COMMAND ----------
+
+lrm_summary.predictions.describe().show()
+
+# COMMAND ----------
+
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+
+# COMMAND ----------
+
+pred_labels = lrm.evaluate(test)
+
+# COMMAND ----------
+
+pred_labels.predictions.show()
+
+# COMMAND ----------
+
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+eval = BinaryClassificationEvaluator(rawPredictionCol="prediction", labelCol="indebt")
+
+# COMMAND ----------
+
+auc =eval.evaluate(pred_labels.predictions)
+
+# COMMAND ----------
+
+auc
+
+# COMMAND ----------
+
+from pyspark.mllib.linalg import Vectors
+from pyspark.mllib.linalg.distributed import RowMatrix
+
+M = RowMatrix(df_master_step3.select(*colList).rdd.map(\
+  lambda row: Vectors.dense(list(row.asDict().values()))))
+
+pc = M.computePrincipalComponents(3)
+
+projected = M.multiply(pc)
+
+projected.rows.collect()
+
+
 
 # COMMAND ----------
 
@@ -560,6 +726,7 @@ from pyspark.ml.feature import StringIndexer
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.feature import IndexToString
 
+# NOTE the vectore assembler is on one field.https://www.youtube.com/watch?v=cZS5xYYIPzk
 
 # set the input and output column names
 assembler = VectorAssembler(inputCols=[ *colList ], outputCol="features")
