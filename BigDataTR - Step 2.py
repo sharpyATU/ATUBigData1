@@ -351,6 +351,10 @@ df_master = df_master.withColumn("target", when(col("loan_status").isin("Default
 
 # COMMAND ----------
 
+df_master.describe().show()
+
+# COMMAND ----------
+
 #Lets visualise where the largest number of defaulted loans exist
 import plotly.express as px
 
@@ -362,7 +366,6 @@ fig = px.choropleth(total_loans_by_state,
                     scope="usa",
                     color='sum(target)',
                     color_continuous_scale="Viridis_r", 
-                    
                     )
 fig.show()
 
@@ -571,169 +574,148 @@ df_master_step3.describe().show()
 
 # COMMAND ----------
 
-from pyspark.ml.feature import Imputer
-from pyspark.sql import DataFrameStatFunctions as statFunc
-from pyspark.ml.feature import StringIndexer
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.feature import IndexToString
-
-
-
-# NOTE the vectore assembler is on one field.https://www.youtube.com/watch?v=cZS5xYYIPzk
-colList = ['loan_amnt','funded_amnt','int_rate','fico_range_low','fico_range_high']
-
-# set the input and output column names
-assembler = VectorAssembler(inputCols=[ *colList ], outputCol="features")
-
-output = assembler.transform( df_master_step3)
-
-df_final  = output.select("features", "indebt")
-
-df_final.show()
-
-
-# COMMAND ----------
-
-train, test = df_final.randomSplit([0.7,0.3] ,seed=42)
-
-# COMMAND ----------
-
-from pyspark.ml.classification import LogisticRegression
-
-lr = LogisticRegression(labelCol="indebt")
-
-lrm = lr.fit(train)
-
-# COMMAND ----------
-
-lrm_summary = lrm.summary
-
-# COMMAND ----------
-
-lrm_summary.predictions.show()
-
-# COMMAND ----------
-
-lrm_summary.predictions.describe().show()
-
-# COMMAND ----------
-
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
-
-# COMMAND ----------
-
-pred_labels = lrm.evaluate(test)
-
-# COMMAND ----------
-
-pred_labels.predictions.show()
-
-# COMMAND ----------
-
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
-eval = BinaryClassificationEvaluator(rawPredictionCol="prediction", labelCol="indebt")
-
-# COMMAND ----------
-
-auc =eval.evaluate(pred_labels.predictions)
-
-# COMMAND ----------
-
-auc
-
-# COMMAND ----------
-
-from pyspark.mllib.linalg import Vectors
-from pyspark.mllib.linalg.distributed import RowMatrix
-
-M = RowMatrix(df_master_step3.select(*colList).rdd.map(\
-  lambda row: Vectors.dense(list(row.asDict().values()))))
-
-pc = M.computePrincipalComponents(3)
-
-projected = M.multiply(pc)
-
-projected.rows.collect()
-
-
-
-# COMMAND ----------
-
 from pyspark.ml.feature import OneHotEncoder
 
-
 #One-Hot Encoding for Categorical Features 
-categorical_cols = ['grade', 'sub_grade','home_ownership','verification_status', 'purpose','addr_state', 'issue_d_year','initial_list_status', 'application_type', 'pymnt_plan'] 
+categorical_cols = ['grade', 'sub_grade','home_ownership','verification_status', 'purpose','addr_state', 'issue_d_year','initial_list_status', 'application_type', 'pymnt_plan','hardship_flag'] 
 
+numerical_cols = df_master_step3.columns
+
+numerical_cols.remove ('id') 
+numerical_cols.remove ('grade') 
+numerical_cols.remove ('sub_grade')
+numerical_cols.remove ('home_ownership')
+numerical_cols.remove ('verification_status')
+numerical_cols.remove ('purpose')
+numerical_cols.remove ('addr_state') 
+numerical_cols.remove ('issue_d_year')
+numerical_cols.remove ('initial_list_status')
+numerical_cols.remove ('application_type')
+numerical_cols.remove ('pymnt_plan')
+numerical_cols.remove ('hardship_flag')
+
+#Create the encodings.
 for categorical_col in categorical_cols:
     indexer = StringIndexer(inputCol=categorical_col, outputCol=categorical_col + "_numeric", handleInvalid='skip')
     indexer_fitted = indexer.fit(df_master_step3) 
     df_master_step3 = indexer_fitted.transform(df_master_step3)
     encoder = OneHotEncoder(inputCols=[categorical_col + "_numeric"], outputCols=[categorical_col + "_onehot"])
     df_master_step3 = encoder.fit(df_master_step3).transform(df_master_step3)    
+    
   
+assembler_inputs = numerical_cols + [c + "_onehot" for c in categorical_cols]
+assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="Features")
 
-#assembler_inputs = numerical_cols + [c + "_index" for c in categorical_cols]
-#assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="features")
-
-# COMMAND ----------
-
-#One-Hot Encoding for Categorical Features 
-categorical_cols_drop = ['grade', 'sub_grade','home_ownership','verification_status', 'purpose','addr_state', 'issue_d_year','initial_list_status', 'application_type', 'pymnt_plan', 'hardship_flag'] 
-
-categorical_cols_drop_numeric = ['grade_numeric', 'sub_grade_numeric','home_ownership_numeric','verification_status_numeric', 'purpose_numeric','addr_state_numeric', 'issue_d_year_numeric','initial_list_status_numeric', 'application_type_numeric', 'pymnt_plan_numeric'] 
-
-df_master_step3 = df_master_step3.drop(*categorical_cols_drop)
-df_master_step3= df_master_step3.drop(*categorical_cols_drop_numeric)
-
-df_master_step3.na.drop()
-
-df_master_step3.describe().show()
 
 
 # COMMAND ----------
 
-df_master_step3.printSchema()
+print(assembler_inputs)
+
+# COMMAND ----------
+
+output = assembler.transform( df_master_step3)
+
+df_final  = output.select("Features", "indebt")
+
+df_final.show()
+
 
 # COMMAND ----------
 
 
-
-
-df_master_step3.groupby("class").count().show()
-
-# COMMAND ----------
-
-# Adding a weight columns to the dataset to handle class imbalance
-# Hardcoding it to save some execution time - ( 303455/1955217) - (#Default Loans / #Total Loans)
-#balancingRatio  = 0.1552
-
-#df_master_step3 = df_master_step3.withColumn("weightColumn", when(col("class") == 0, balancingRatio)
-#                                           .otherwise((1-balancingRatio)))
+# Scaling the vector of features
+from pyspark.ml.feature import StandardScaler
+ss =  StandardScaler(inputCol= 'Features', outputCol= 'features')
+scaled_df = ss.fit(df_final).transform(df_final)
 
 # COMMAND ----------
 
-colList = df_master_step3.columns
-print(colList)
-colList.remove("class")
-print(colList)
+scaled_df.show(3)
 
 # COMMAND ----------
 
-from pyspark.ml.feature import Imputer
-from pyspark.sql import DataFrameStatFunctions as statFunc
-from pyspark.ml.feature import StringIndexer
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.feature import IndexToString
+# Invoking the KMeans algorithm
+from pyspark.ml.clustering import KMeans
 
-# NOTE the vectore assembler is on one field.https://www.youtube.com/watch?v=cZS5xYYIPzk
+# COMMAND ----------
 
-# set the input and output column names
-assembler = VectorAssembler(inputCols=[ *colList ], outputCol="features")
+# Ploting the elbow curve
 
-loanDFTransformed = assembler.transform( df_master_step3)
+import pandas as pd
+x = [3,4,5,6,7,9,10,11,12]
+wcss = {}
+for i in x:
+  Kmeans_model = KMeans(featuresCol= 'features', k = i).fit(scaled_df)
+  wcss[i] = Kmeans_model.summary.trainingCost
+Wcss = pd.DataFrame(wcss, index = [0]).T
+Wcss.columns = ['WCSS']
 
-loanDFTransformed.show(5)
+
+     
+
+# COMMAND ----------
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+plt.figure(figsize= (30,10))
+plt.title("The Elbow Method")
+sns.lineplot(x = Wcss.index, y= Wcss['WCSS'])
+plt.xlabel("Number of Clusters")
+plt.ylabel("WCSS score")
+plt.grid()
+plt.show()
+
+# COMMAND ----------
+
+# From the Elbow curve the optimal number of clusters is 10 clusters
+k_means_model_2 = KMeans(k=10, seed = 2).fit(df_final.select("features"))
+preds_2 = k_means_model_2.transform(scaled_df)
+
+# COMMAND ----------
+
+
+# Visualizing the clusters
+from pyspark.ml.feature import PCA
+
+############  ANDY You are HERE
+principle_component_analysis =  PCA(K =2, inputCol= 'features', outputCol= 'pc_components')
+model = principle_component_analysis.fit(scaled_df).transform(scaled_df)
+
+
+#pc1 = [] 
+#pc2 = []
+
+
+#for i in model.select('pc_components').collect():
+#  pc1.append(i[0][0])
+#  pc2.append(i[0][1])
+  
+    
+    
+
+# COMMAND ----------
+
+model.select('pc_components').show(truncate=False)
+
+
+# COMMAND ----------
+
+print("Explained Variance by the princeple components is ", principle_component_analysis.fit(df_final).explainedVariance.sum())
+
+# COMMAND ----------
+
+plt.figure(figsize= (15,5))  
+plt.title("PCA with 96% explained variance")
+plt.scatter(pc1, pc2)
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.grid()
+plt.show()
+
+# COMMAND ----------
+
+train, test = df_final.randomSplit([0.7,0.3] ,seed=42)
 
 # COMMAND ----------
 
@@ -752,46 +734,6 @@ from hyperopt.pyll import scope
 
 # Enable MLflow autologging for this notebook
 mlflow.autolog()
-
-# COMMAND ----------
-
-df_master.printSchema()
-
-# COMMAND ----------
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-from sklearn.decomposition import PCA
-
-#First thing we need to do is define the feature sets and the labels 
-X = colList #define the feature set [get rid of the target column (Class)] https://adb-5488307367723488.8.azuredatabricks.net/?o=5488307367723488#
-y = df_master_step3['class']   # define the labels
-
-#Now Split the dataset into the Training set and Test set
-X_train, X_test, y_train, y_test = train_test_split(X, y,test_size=0.2, random_state=56) #20% to be used in the training set and set the random state for repeatbility of this exercise  (should be zero)
-
-#PCA performs best with a normalized feature set. So will perform standard scalar normalization to normalize our feature set. To do this, execute the following code:
-sscaler = StandardScaler()
-X_train = sscaler.fit_transform(X_train)
-X_test = sscaler.transform(X_test)
-
-# COMMAND ----------
-
-# Define classification labels based on the loan being good or bad.
-data_df = df_master
-data_labels = data_df['class'] > 0
-data_df = data_df.drop('class')
- 
-# Split 80/20 train-test
-X_train, X_test, y_train, y_test = sklearn.model_selection.train_test_split(
-  data_df,
-  data_labels,
-  test_size=0.2,
-  random_state=1
-)
-
-
 
 # COMMAND ----------
 
