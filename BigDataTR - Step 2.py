@@ -515,10 +515,6 @@ display(df_master_step3)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # Find Count of Null, None, NaN of All DataFrame Columns , we can't run ML libs with nulls and empty data fields
 from pyspark.sql.functions import col,isnan,when,count
 df2 = df_master_step3.select([count(when(col(c).contains('None') | \
@@ -568,6 +564,7 @@ df_master_step3.printSchema()
 
 # COMMAND ----------
 
+#Set the target field to be a double as K-MEANS wont' run with an integer
 #df_master_step3 = df_master_step3.drop("features")
 df_master_step3 = df_master_step3.withColumn('indebt', df_master_step3['target'].cast('double'))
 df_master_step3.describe().show()
@@ -576,11 +573,12 @@ df_master_step3.describe().show()
 
 from pyspark.ml.feature import OneHotEncoder
 
-#One-Hot Encoding for Categorical Features 
+#One-Hot Encoding for Categorical Features (equivalent of dummiues for PySpark)
 categorical_cols = ['grade', 'sub_grade','home_ownership','verification_status', 'purpose','addr_state', 'issue_d_year','initial_list_status', 'application_type', 'pymnt_plan','hardship_flag'] 
 
 numerical_cols = df_master_step3.columns
 
+# Remove the categorical colums from our nnumerical only list
 numerical_cols.remove ('id') 
 numerical_cols.remove ('grade') 
 numerical_cols.remove ('sub_grade')
@@ -610,28 +608,43 @@ assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="Features")
 
 # COMMAND ----------
 
+#Check we have our encodings
 print(assembler_inputs)
 
 # COMMAND ----------
 
+# transform to provide a Vector with our features, display for inspection
 output = assembler.transform( df_master_step3)
 
 df_final  = output.select("Features", "indebt")
 
-df_final.show()
+# Refresh temporary table to hold the data for optimised queries via Spark SQL and Temp tables etc..
+temp_table_name = "loantempdata"
+df_master_step3.createOrReplaceTempView(temp_table_name)
 
 
 # COMMAND ----------
 
+df_final.show()
 
-# Scaling the vector of features
+# COMMAND ----------
+
+# Scale the vector of features, so the data is not imbalanced 
 from pyspark.ml.feature import StandardScaler
 ss =  StandardScaler(inputCol= 'Features', outputCol= 'features')
 scaled_df = ss.fit(df_final).transform(df_final)
 
 # COMMAND ----------
 
+# Inspect the new spark Data Frame
 scaled_df.show(3)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##Use KMeans and PCA for feature reduction
+# MAGIC 
+# MAGIC As we have a very high number of features use KMEAMs and PCA to identify whether a smaller feature set will maintain a reasonable accuracy in the model to predict if someone will default on there loan.
 
 # COMMAND ----------
 
@@ -640,11 +653,12 @@ from pyspark.ml.clustering import KMeans
 
 # COMMAND ----------
 
-# Ploting the elbow curve
+# Ploting the elbow curve to see best number of features 
 
 import pandas as pd
-x = [3,4,5,6,7,9,10,11,12]
+x = [1,2,3,4,5,6,7,9,10,11,12,16,20]
 wcss = {}
+#run the Kmeans with various features
 for i in x:
   Kmeans_model = KMeans(featuresCol= 'features', k = i).fit(scaled_df)
   wcss[i] = Kmeans_model.summary.trainingCost
@@ -668,45 +682,46 @@ plt.show()
 
 # COMMAND ----------
 
-# From the Elbow curve the optimal number of clusters is 10 clusters
-k_means_model_2 = KMeans(k=10, seed = 2).fit(df_final.select("features"))
+# MAGIC %md
+# MAGIC Initially presumed 10 features was providing corelation (see flat line at 10), however on further analysis expanding the number out to 20 there was no evidence of an elbow. Suggesting no small set of feature reduction will help with my predictions
+
+# COMMAND ----------
+
+# From the Elbow curve , assume the optimal number of clusters is 20 clusters
+k_means_model_2 = KMeans(k=20, seed = 2).fit(df_final.select("features"))
 preds_2 = k_means_model_2.transform(scaled_df)
 
 # COMMAND ----------
 
 
 # Visualizing the clusters
+
 from pyspark.ml.feature import PCA
 
-############  ANDY You are HERE
-principle_component_analysis =  PCA(K =2, inputCol= 'features', outputCol= 'pc_components')
+principle_component_analysis =  PCA(k =2, inputCol= 'features', outputCol= 'pcaFeatures')
 model = principle_component_analysis.fit(scaled_df).transform(scaled_df)
+#model.select('pc_components').show(truncate=False)
 
-
-#pc1 = [] 
-#pc2 = []
-
-
-#for i in model.select('pc_components').collect():
-#  pc1.append(i[0][0])
-#  pc2.append(i[0][1])
-  
-    
+pc1 = [] 
+pc2 = []
+for i in model.select('pcaFeatures').collect():
+  pc1.append(i[0][0])
+  pc2.append(i[0][1])    
     
 
 # COMMAND ----------
 
-model.select('pc_components').show(truncate=False)
+model.select('pcaFeatures').show(truncate=False)
 
 
 # COMMAND ----------
 
-print("Explained Variance by the princeple components is ", principle_component_analysis.fit(df_final).explainedVariance.sum())
+print("Explained Variance with princeple components of 20 is ", principle_component_analysis.fit(scaled_df).explainedVariance.sum())
 
 # COMMAND ----------
 
 plt.figure(figsize= (15,5))  
-plt.title("PCA with 96% explained variance")
+plt.title("PCA with XX% explained variance")
 plt.scatter(pc1, pc2)
 plt.xlabel("PC1")
 plt.ylabel("PC2")
@@ -715,113 +730,311 @@ plt.show()
 
 # COMMAND ----------
 
-train, test = df_final.randomSplit([0.7,0.3] ,seed=42)
+# MAGIC %md
+# MAGIC Something is wrong, only 1 real cluster visible, look at 3 Components to see outcome
 
 # COMMAND ----------
 
-import mlflow
-import numpy as np
-import pandas as pd
-import sklearn.datasets
-import sklearn.metrics
-import sklearn.model_selection
-import sklearn.ensemble
- 
-from hyperopt import fmin, tpe, hp, SparkTrials, Trials, STATUS_OK
-from hyperopt.pyll import scope
+# Lets try again and see if any less variance exists at 3 PC
+k_means_model_3 = KMeans(k=3, seed = 2).fit(df_final.select("features"))
+preds_3 = k_means_model_3.transform(scaled_df)
+
+# Visualizing the clusters
+from pyspark.ml.feature import PCA
+
+principle_component_analysis3 =  PCA(k =2, inputCol= 'features', outputCol= 'pcaFeatures3')
+model3 = principle_component_analysis3.fit(scaled_df).transform(scaled_df)
+#model.select('pc_components').show(truncate=False)
+
+pc1 = [] 
+pc2 = []
+for i in model3.select('pcaFeatures3').collect():
+  pc1.append(i[0][0])
+  pc2.append(i[0][1])   
+    
+model.select('pcaFeatures').show(truncate=False)
+
+plt.figure(figsize= (15,5))  
+plt.title("PCA 3 features with XX% explained variance")
+plt.scatter(pc1, pc2)
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.grid()
+plt.show()
+
+print("Explained Variance by 3 principle components is ", principle_component_analysis3.fit(scaled_df).explainedVariance.sum())
 
 # COMMAND ----------
 
-# Enable MLflow autologging for this notebook
-mlflow.autolog()
+print("Explained Variance by 3 principle components is ", principle_component_analysis3.fit(scaled_df).explainedVariance.sum())
 
 # COMMAND ----------
 
-with mlflow.start_run(run_name="gradient_boost") as run:
-    model = sklearn.ensemble.GradientBoostingClassifier(random_state=0)
-
-    # Models, parameters, and training metrics are tracked automatically
-    model.fit(X_train, y_train)
-
-    predicted_probs = model.predict_proba(X_test)
-    roc_auc = sklearn.metrics.roc_auc_score(y_test, predicted_probs[:, 1])
-
-    # The AUC score on test data is not automatically logged, so log it manually
-    mlflow.log_metric("test_auc", roc_auc)
-    print("Test AUC of: {}".format(roc_auc))
+# MAGIC %md
+# MAGIC I've cleary carried out a wrong step here OR there's very limited corelation between the features and the data. 2 features preserve the equivlalent variance of 20
+# MAGIC 
+# MAGIC MOVE On to use Synapse ML This has inbuilt functionality to assist with features selection
 
 # COMMAND ----------
 
-# Start a new run and assign a run_name for future reference
-with mlflow.start_run(run_name="gradient_boost") as run:
-    model_2 = sklearn.ensemble.GradientBoostingClassifier(
-        random_state=0,
-        # Try a new parameter setting for n_estimators
-        n_estimators=200,
-    )
-    model_2.fit(X_train, y_train)
-
-    predicted_probs = model_2.predict_proba(X_test)
-    roc_auc = sklearn.metrics.roc_auc_score(y_test, predicted_probs[:, 1])
-    mlflow.log_metric("test_auc", roc_auc)
-    print("Test AUC of: {}".format(roc_auc))
+# MAGIC %md
+# MAGIC ##Synapse ML 
+# MAGIC 
+# MAGIC Feature selection and model generation are proposed to be a lot simpler with synapseml!
 
 # COMMAND ----------
 
-# Define the search space to explore
-search_space = {
-    "n_estimators": scope.int(hp.quniform("n_estimators", 20, 1000, 1)),
-    "learning_rate": hp.loguniform("learning_rate", -3, 0),
-    "max_depth": scope.int(hp.quniform("max_depth", 2, 5, 1)),
-}
-
-
-def train_model(params):
-    # Enable autologging on each worker
-    mlflow.autolog()
-    with mlflow.start_run(nested=True):
-        model_hp = sklearn.ensemble.GradientBoostingClassifier(random_state=0, **params)
-        model_hp.fit(X_train, y_train)
-        predicted_probs = model_hp.predict_proba(X_test)
-        # Tune based on the test AUC
-        # In production settings, you could use a separate validation set instead
-        roc_auc = sklearn.metrics.roc_auc_score(y_test, predicted_probs[:, 1])
-        mlflow.log_metric("test_auc", roc_auc)
-
-        # Set the loss to -1*auc_score so fmin maximizes the auc_score
-        return {"status": STATUS_OK, "loss": -1 * roc_auc}
-
-
-# SparkTrials distributes the tuning using Spark workers
-# Greater parallelism speeds processing, but each hyperparameter trial has less information from other trials
-# On smaller clusters or Databricks Community Edition try setting parallelism=2
-spark_trials = SparkTrials(parallelism=8)
-
-with mlflow.start_run(run_name="gb_hyperopt") as run:
-    # Use hyperopt to find the parameters yielding the highest AUC
-    best_params = fmin(
-        fn=train_model,
-        space=search_space,
-        algo=tpe.suggest,
-        max_evals=32,
-        trials=spark_trials,
-    )
+# Create a new DF to hold the new model
+output2 = assembler.transform( df_master_step3)
 
 # COMMAND ----------
 
-# Sort runs by their test auc; in case of ties, use the most recent run
-best_run = mlflow.search_runs(
-    order_by=["metrics.test_auc DESC", "start_time DESC"],
-    max_results=10,
-).iloc[0]
-print("Best Run")
-print("AUC: {}".format(best_run["metrics.test_auc"]))
-print("Num Estimators: {}".format(best_run["params.n_estimators"]))
-print("Max Depth: {}".format(best_run["params.max_depth"]))
-print("Learning Rate: {}".format(best_run["params.learning_rate"]))
+# custom function to convert the data type of DataFrame columns# Write 
+def convertColumn(df, names, newType):
+    for name in names: 
+        df = df.withColumn(name, df[name].cast(newType))
+    return df 
 
-best_model_pyfunc = mlflow.pyfunc.load_model(
-    "runs:/{run_id}/model".format(run_id=best_run.run_id)
+# COMMAND ----------
+
+#'Light GMDB is reported to use it's own internal mechanism for hot encoding fields, advices is to you ints for categorical fields. 
+#  Delete the UDFs created in the earlier steps
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+
+wipeEncodingDummies = [
+'grade_onehot',
+'sub_grade_onehot',
+'home_ownership_onehot',
+'verification_status_onehot',
+'purpose_onehot',
+'addr_state_onehot',
+'issue_d_year_onehot',
+'initial_list_status_onehot',
+'application_type_onehot',
+'pymnt_plan_onehot',
+'hardship_flag_onehot',
+'Features']
+
+output2 = output2.drop(*wipeEncodingDummies)
+
+
+
+
+
+# COMMAND ----------
+
+#convert the fields that were previouslly converted from sting to doubles.. to ints.
+colsforSynapseInt =[
+'home_ownership_numeric',
+'verification_status_numeric',
+'purpose_numeric',
+'addr_state_numeric',
+'issue_d_year_numeric',
+'initial_list_status_numeric',
+'application_type_numeric',
+'pymnt_plan_numeric',
+'initial_list_status',
+'grade_numeric',
+'sub_grade_numeric',
+'hardship_flag_numeric']
+    
+output2   = convertColumn(output2, colsforSynapseInt, IntegerType())
+
+# COMMAND ----------
+
+#Drop  redundent data where alternative fields have been generated.
+wipeDummies = [
+'grade',
+'sub_grade',
+'home_ownership',
+'issue_d_year',
+'initial_list_status',
+'id',
+'Features',
+'indebt'
+]
+
+output2 = output2.drop(*wipeDummies)
+output2 = output2.drop(*categorical_cols)
+
+# COMMAND ----------
+
+#Create 70/30 split for the test data
+train, test = output2.randomSplit([0.70, 0.30], seed=21)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Add featurizer to convert features to vector
+
+# COMMAND ----------
+
+from pyspark.ml.feature import VectorAssembler
+
+feature_cols = output2.columns[1:]
+featurizer = VectorAssembler(inputCols=feature_cols, outputCol="features")
+train_data = featurizer.transform(train)["target", "features"]
+test_data = featurizer.transform(test)["target", "features"]
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Check the data is balanced
+
+# COMMAND ----------
+
+display(train_data.groupBy("target").count())
+
+# COMMAND ----------
+
+#data is unbalanced esnure on creation of classifier it is aware 
+from synapse.ml.lightgbm import LightGBMClassifier
+
+model = LightGBMClassifier(
+    objective="binary", featuresCol="features", labelCol="target", isUnbalance=True
 )
-best_model_predictions = best_model_pyfunc.predict(X_test[:5])
-print("Test Predictions: {}".format(best_model_predictions))
+
+# COMMAND ----------
+
+#Fit the model
+model = model.fit(train_data)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Call "saveNativeModel", to allow the model to be used to extract and release the model if we had a complete pipeline
+
+# COMMAND ----------
+
+from synapse.ml.lightgbm import LightGBMClassificationModel
+
+model.saveNativeModel("/tmp/lgbmclassifier.model")
+model = LightGBMClassificationModel.loadNativeModelFromFile("/tmp/lgbmclassifier.model")
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Peform a Visualization of the Features Importance
+
+# COMMAND ----------
+
+feature_importances = model.getFeatureImportances()
+print(feature_importances)
+
+
+# COMMAND ----------
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+feature_importances = model.getFeatureImportances()
+fi = pd.Series(feature_importances, index=feature_cols)
+fi = fi.sort_values(ascending=True)
+f_index = fi.index
+f_values = fi.values
+
+# print feature importances
+print("f_index:", f_index)
+print("f_values:", f_values)
+
+# plot
+x_index = list(range(len(fi)))
+x_index = [x / len(fi) for x in x_index]
+plt.rcParams["figure.figsize"] = (20, 20)
+plt.barh(
+    x_index, f_values, height=0.028, align="center", color="green", tick_label=f_index
+)
+plt.xlabel("importances")
+plt.ylabel("features")
+plt.show()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Intution tells me the "_numeric" fields are not being classified as expected.  
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Predictions with the model
+
+# COMMAND ----------
+
+predictions = model.transform(test_data)
+predictions.limit(20).toPandas()
+
+# COMMAND ----------
+
+from synapse.ml.train import ComputeModelStatistics
+
+metrics = ComputeModelStatistics(
+    evaluationMetric="classification",
+    labelCol="target",
+    scoredLabelsCol="prediction",
+).transform(predictions)
+display(metrics)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC This model is has a precision and accuracy and recall of 1. Identifying the model can predict loans that are not in debt 100% of the time and in debt a 100% of the time. That's an excellent model. (too good!)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Within Synapses ML there is help to allow us to auto-prepare the features for ML training, find the best model from a pool of trained model to see what perfoms best on our dataset, an prodivde metrics on the dataset.The CompueModelStatistics Transformer computes the different metrics on a scored dataset (in our case, the validation dataset) at the same time. Initiate request.
+
+# COMMAND ----------
+
+from synapse.ml.train import TrainClassifier, ComputeModelStatistics
+from synapse.ml.automl import FindBestModel
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.classification import LogisticRegression
+
+#drop the features from the last run
+output2.drop('features')
+
+# Prepare data for learning
+train, test, validation = output2.randomSplit([0.60, 0.20, 0.20], seed=123)
+
+# Train the models on the 'train' data
+lrHyperParams = [0.05, 0.1, 0.2, 0.4]
+logisticRegressions = [
+    LogisticRegression(regParam=hyperParam) for hyperParam in lrHyperParams
+]
+lrmodels = [
+    TrainClassifier(model=lrm, labelCol="target", numFeatures=10000).fit(train)
+    for lrm in logisticRegressions
+]
+
+# Select the best model
+bestModel = FindBestModel(evaluationMetric="AUC", models=lrmodels).fit(test)
+
+
+# Get AUC on the validation dataset
+predictions = bestModel.transform(validation)
+
+
+
+# COMMAND ----------
+
+metrics = ComputeModelStatistics(
+    evaluationMetric="classification",
+    labelCol="target",
+    scoredLabelsCol="prediction",
+).transform(predictions)
+display(metrics)
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##Best model's AUC on validation set = 99.96%
+# MAGIC This suggests we have a good model
+
+# COMMAND ----------
+
+
