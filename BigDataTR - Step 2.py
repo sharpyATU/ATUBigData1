@@ -33,7 +33,7 @@ from plotly.offline import init_notebook_mode,iplot
 
 # COMMAND ----------
 
-# Load the data file
+# Load the data file prepared in Step 1
 
 file_location = "/FileStore/tables/step2_0402_2007_to_2018Q4_2201.csv"
 #file_location = "/FileStore/tables/step2_0402_2007_to_2018Q4-2201.csv"
@@ -278,7 +278,7 @@ subgrade.map(sns.boxplot, 'grade', 'int_rate')
 
 # COMMAND ----------
 
-#Perform the same step but use a col_wrap of 5 to observer the variane in interes from sub group classes e.g A1,B1,C1 etc...
+#Perform the same step but use a col_wrap of 5 to observer the variance in interest from sub group classes e.g A1,B1,C1 etc...
 subg = sns.FacetGrid(df_tempLoan, col="sub_grade", sharex=False, col_wrap=5, col_order=subgradeOrder)
 subg.map(sns.boxplot, 'grade', 'int_rate')
 
@@ -408,7 +408,7 @@ df2.head(2)
 
 # COMMAND ----------
 
-#'Drop fields where the data is full of highl null values, most of this data shows information once someone is in a debt scenario , not that they will debt
+#'Drop fields where the data is full of high null values, most of this data shows information once someone is in a debt scenario
 lowimportancem_high_missingdata_cols = [
     "collections_12_mths_ex_med",
     "il_util",
@@ -644,7 +644,7 @@ scaled_df.show(3)
 # MAGIC %md
 # MAGIC ##Use KMeans and PCA for feature reduction
 # MAGIC 
-# MAGIC As we have a very high number of features use KMEAMs and PCA to identify whether a smaller feature set will maintain a reasonable accuracy in the model to predict if someone will default on there loan.
+# MAGIC As we have a very high number of features use K-MEANMs and PCA to identify whether a smaller feature set will maintain a reasonable accuracy in the model to predict if someone will default on there loan.
 
 # COMMAND ----------
 
@@ -656,7 +656,7 @@ from pyspark.ml.clustering import KMeans
 # Ploting the elbow curve to see best number of features 
 
 import pandas as pd
-x = [1,2,3,4,5,6,7,9,10,11,12,16,20]
+x = [2,3,4,5,6,7,9,10,11,12,16,20]
 wcss = {}
 #run the Kmeans with various features
 for i in x:
@@ -716,7 +716,7 @@ model.select('pcaFeatures').show(truncate=False)
 
 # COMMAND ----------
 
-print("Explained Variance with princeple components of 20 is ", principle_component_analysis.fit(scaled_df).explainedVariance.sum())
+print("Explained Variance with principle components of 20 is ", principle_component_analysis.fit(scaled_df).explainedVariance.sum())
 
 # COMMAND ----------
 
@@ -954,7 +954,7 @@ plt.show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Intution tells me the "_numeric" fields are not being classified as expected.  
+# MAGIC Intution suggests the "_numeric" fields may not being classified as expected.  
 
 # COMMAND ----------
 
@@ -985,7 +985,8 @@ display(metrics)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Within Synapses ML there is help to allow us to auto-prepare the features for ML training, find the best model from a pool of trained model to see what perfoms best on our dataset, an prodivde metrics on the dataset.The CompueModelStatistics Transformer computes the different metrics on a scored dataset (in our case, the validation dataset) at the same time. Initiate request.
+# MAGIC Within Synapses ML there is help to allow us to auto-prepare the features for ML training, find the best model from a pool of trained model to see what perfoms best on our dataset, an prodivde metrics on the dataset.The CompueModelStatistics Transformer computes the different metrics on a scored dataset (in our case, the validation dataset) at the same time. Will use this with a train , test and validation test set to get a better indication of model accuracy 
+# MAGIC Initiate request.
 
 # COMMAND ----------
 
@@ -1033,7 +1034,7 @@ display(metrics)
 
 # MAGIC %md
 # MAGIC ##Best model's AUC on validation set = 99.96%
-# MAGIC This suggests we have a good model
+# MAGIC However Recall is poor, further investigation would be required as a lot of false positives would be experienced with this model
 
 # COMMAND ----------
 
